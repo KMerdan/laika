@@ -157,8 +157,8 @@ class AstroDog:
 
   def get_nav_data(self, time):
     def download_and_parse(constellation, parse_rinex_nav_func):
-      file_path = download_nav(time, cache_dir=self.cache_dir, constellation=constellation)
-      return parse_rinex_nav_func(file_path) if file_path else {}
+      ephem_bytes = download_nav(time, cache_dir=self.cache_dir, constellation=constellation)
+      return parse_rinex_nav_func(ephem_bytes) if ephem_bytes else {}
 
     fetched_ephems = {}
 
@@ -168,6 +168,7 @@ class AstroDog:
       for k, v in download_and_parse(ConstellationId.GLONASS, parse_rinex_nav_msg_glonass).items():
         fetched_ephems.setdefault(k, []).extend(v)
     self.add_navs(fetched_ephems)
+    print(f"astro adding nav ephems")
 
     if sum([len(v) for v in fetched_ephems.values()]) == 0:
       begin_day = GPSTime(time.week, SECS_IN_DAY * (time.tow // SECS_IN_DAY))
@@ -333,7 +334,8 @@ class AstroDog:
     iono_delay = ionex.get_delay(rcv_pos, az, el, sat_pos, time, freq) if ionex is not None else 0.
     trop_delay = saast(rcv_pos, el)
     code_bias = dcb.get_delay(signal) if dcb is not None else 0.
-    return iono_delay + trop_delay + code_bias
+    return 0 #trop_delay
+    #return iono_delay + trop_delay + code_bias
 
   def _get_delay_dgps(self, prn, rcv_pos, time):
     dgps_corrections = self.get_dgps_corrections(time, rcv_pos)

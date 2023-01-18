@@ -184,7 +184,7 @@ def https_download_file(url):
   crl.setopt(crl.SSL_CIPHER_LIST, 'DEFAULT@SECLEVEL=1')
   crl.setopt(crl.COOKIEJAR, '/tmp/cddis_cookies')
   crl.setopt(pycurl.CONNECTTIMEOUT, 10)
-  
+
   buf = BytesIO()
   crl.setopt(crl.WRITEDATA, buf)
   crl.perform()
@@ -243,8 +243,7 @@ def download_and_cache_file_return_first_success(url_bases, folder_and_file_name
   last_error = None
   for folder_path, filename in folder_and_file_names:
     try:
-      file = download_and_cache_file(url_bases, folder_path, cache_dir, filename, compression, overwrite)
-      return file
+      return download_and_cache_file(url_bases, folder_path, cache_dir, filename, compression, overwrite)
     except DownloadFailed as e:
       last_error = e
 
@@ -258,13 +257,14 @@ def download_and_cache_file(url_base, folder_path: str, cache_dir: str, filename
   filepath = str(hatanaka.get_decompressed_path(os.path.join(folder_path_abs, filename)))
 
   filepath_attempt = filepath + '.attempt_time'
-
+  print(f"filepath: {filepath}")
   if os.path.exists(filepath_attempt):
     with open(filepath_attempt, 'r') as rf:
       last_attempt_time = float(rf.read())
     if time.time() - last_attempt_time < SECS_IN_HR:
       raise DownloadFailed(f"Too soon to try downloading {folder_path + filename_zipped} from {url_base} again since last attempt")
-  if not os.path.isfile(filepath) or overwrite:
+
+  if not os.path.isfile(filepath):
     try:
       data_zipped = download_file(url_base, folder_path, filename_zipped)
     except (DownloadFailed, pycurl.error, socket.timeout):
@@ -274,15 +274,22 @@ def download_and_cache_file(url_base, folder_path: str, cache_dir: str, filename
         wf.write(str(unix_time))
       raise DownloadFailed(f"Could not download {folder_path + filename_zipped} from {url_base} ")
 
+    rinex_data = hatanaka.decompress(data_zipped)
+  else:
+    with open(filepath, 'rb') as f:
+      rinex_data = f.read()
+  
+  store_files = "CI" in os.environ or "REPLAY" in os.environ
+  if store_files and (not os.path.isfile(filepath) or overwrite):
     os.makedirs(folder_path_abs, exist_ok=True)
-    ephem_bytes = hatanaka.decompress(data_zipped)
     try:
       with atomic_write(filepath, mode='wb', overwrite=overwrite) as f:
-        f.write(ephem_bytes)
+        f.write(rinex_data)
     except FileExistsError:
       # Only happens when same file is downloaded in parallel by another process.
       pass
-  return filepath
+  
+  return rinex_data#, filepath
 
 
 # Currently, only GPS and Glonass are supported for daily and hourly data.
@@ -295,7 +302,7 @@ def download_nav(time: GPSTime, cache_dir, constellation: ConstellationId):
     if constellation not in CONSTELLATION_NASA_CHAR:
       return None
     c = CONSTELLATION_NASA_CHAR[constellation]
-    if GPSTime.from_datetime(datetime.utcnow()) - time > SECS_IN_DAY:
+    if GPSTime.from_datetime(datetime.utcnow()) - time > SECS_IN_DAY and False:
       url_bases = (
         'https://github.com/commaai/gnss-data/raw/master/gnss/data/daily/',
         'sftp://gdc.cddis.eosdis.nasa.gov/gnss/data/daily/',
@@ -462,8 +469,7 @@ def download_cors_coords(cache_dir):
   )
   file_names = list_dir(url_bases)
   file_names = [file_name for file_name in file_names if file_name.endswith('coord.txt')]
-  filepaths = download_files(url_bases, '', cache_subdir, file_names)
-  return filepaths
+  return download_files(url_bases, '', cache_subdir, file_names)
 
 
 def download_cors_station(time, station_name, cache_dir):
@@ -475,8 +481,7 @@ def download_cors_station(time, station_name, cache_dir):
     'https://alt.ngs.noaa.gov/corsdata/rinex/',
   )
   try:
-    filepath = download_and_cache_file(url_bases, folder_path, cache_dir+'cors_obs/', filename, compression='.gz')
-    return filepath
+    return download_and_cache_file(url_bases, folder_path, cache_dir+'cors_obs/', filename, compression='.gz')
   except DownloadFailed:
     print("File not downloaded, check availability on server.")
     return None

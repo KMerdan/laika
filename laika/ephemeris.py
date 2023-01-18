@@ -16,18 +16,26 @@ from .constants import SPEED_OF_LIGHT, SECS_IN_MIN, SECS_IN_HR, SECS_IN_DAY, \
 from .helpers import get_constellation, get_prn_from_nmea_id
 
 
-def read4(f, rinex_ver):
+def read4_orig(f, rinex_ver):
   line = f.readline()[:-1]
   if rinex_ver == 2:
     line = ' ' + line  # Shift 1 char to the right
   line = line.replace('D', 'E')  # Handle bizarro float format
   return float(line[4:23]), float(line[23:42]), float(line[42:61]), float(line[61:80])
 
+def read4(ephem_bytes, rinex_ver):
+  line, ephem_bytes = get_line(ephem_bytes)
+  if rinex_ver == 2:
+    line = ' ' + line  # Shift 1 char to the right
+  line = line.replace('D', 'E')  # Handle bizarro float format
+  return float(line[4:23]), float(line[23:42]), float(line[42:61]), float(line[61:80]), ephem_bytes
+
 
 def convert_ublox_ephem(ublox_ephem, current_time: Optional[datetime] = None):
   # Week time of ephemeris gps msg has a roll-over period of 10 bits (19.6 years)
   # The latest roll-over was on 2019-04-07
   week = ublox_ephem.gpsWeek
+  print("CONVERT_UBLOX_EHPEM")
   if current_time is None:
     # Each message is incremented to be greater or equal than week 1877 (2015-12-27).
     #  To skip this use the current_time argument
@@ -66,6 +74,7 @@ def convert_ublox_ephem(ublox_ephem, current_time: Optional[datetime] = None):
   ephem['omega0'] = ublox_ephem.omega0
 
   ephem['healthy'] = ublox_ephem.svHealth == 0.0
+  print(f"{ephem} {ublox_ephem.svHealth}")
 
   epoch = ephem['toe']
   return GPSEphemeris(ephem, epoch)
@@ -423,16 +432,20 @@ def read_prn_data(data, prn, deg=16, deg_t=1):
   return ephems
 
 
-def parse_rinex_nav_msg_gps(file_name):
+def get_line(data_bytes, delimiter=b'\n'):
+  idx = data_bytes.find(delimiter) 
+  return data_bytes[:idx].decode("utf-8"), data_bytes[idx+1:]
+
+
+def parse_rinex_nav_msg_gps(ephem_bytes):
   ephems = defaultdict(list)
   got_header = False
   rinex_ver = None
   #ion_alpha = None
   #ion_beta = None
-  f = open(file_name)
   while True:
-    line = f.readline()[:-1]
-    if not line:
+    line, ephem_bytes = get_line(ephem_bytes)
+    if len(line) == 0:
       break
     if not got_header:
       if rinex_ver is None:
@@ -473,31 +486,35 @@ def parse_rinex_nav_msg_gps(file_name):
     e['af1'] = float(line[42:61])
     e['af2'] = float(line[61:80])
 
-    e['iode'], e['crs'], e['dn'], e['m0'] = read4(f, rinex_ver)
-    e['cuc'], e['ecc'], e['cus'], e['sqrta'] = read4(f, rinex_ver)
-    toe_tow, e['cic'], e['omega0'], e['cis'] = read4(f, rinex_ver)
-    e['inc'], e['crc'], e['w'], e['omegadot'] = read4(f, rinex_ver)
-    e['inc_dot'], e['l2_codes'], toe_week, e['l2_pflag'] = read4(f, rinex_ver)
-    e['sv_accuracy'], e['health'], e['tgd'], e['iodc'] = read4(f, rinex_ver)
-    f.readline()  # Discard last row
-
+    e['iode'], e['crs'], e['dn'], e['m0'], ephem_bytes = read4(ephem_bytes, rinex_ver)
+    e['cuc'], e['ecc'], e['cus'], e['sqrta'], ephem_bytes = read4(ephem_bytes, rinex_ver)
+    toe_tow, e['cic'], e['omega0'], e['cis'], ephem_bytes = read4(ephem_bytes, rinex_ver)
+    e['inc'], e['crc'], e['w'], e['omegadot'], ephem_bytes = read4(ephem_bytes, rinex_ver)
+    e['inc_dot'], e['l2_codes'], toe_week, e['l2_pflag'], ephem_bytes = read4(ephem_bytes, rinex_ver)
+    e['sv_accuracy'], e['health'], e['tgd'], e['iodc'], ephem_bytes = read4(ephem_bytes, rinex_ver)
+    #f.readline()  # Discard last row
+    _, ephem_bytes = get_line(ephem_bytes)
+    
     e['toe'] = GPSTime(toe_week, toe_tow)
     e['healthy'] = (e['health'] == 0.0)
 
-    ephem = GPSEphemeris(e, epoch, file_name=file_name)
+    ephem = GPSEphemeris(e, epoch, file_name="raw_data")
+    #print(f"ephem: {ephem}")
     ephems[ephem.prn].append(ephem)
-  f.close()
+  #f.close()
+
+  #print(f"return ephems: {ephems}")
   return ephems
 
 
-def parse_rinex_nav_msg_glonass(file_name):
+def parse_rinex_nav_msg_glonass(ephem_bytes):
   ephems = defaultdict(list)
-  f = open(file_name)
   got_header = False
   rinex_ver = None
+
   while True:
-    line = f.readline()[:-1]
-    if not line:
+    line, ephem_bytes = get_line(ephem_bytes)
+    if len(line) == 0:
       break
     if not got_header:
       if rinex_ver is None:
@@ -524,13 +541,13 @@ def parse_rinex_nav_msg_glonass(file_name):
     e['GammaN'] = float(line[42:61])
     e['tk'] = float(line[61:80])
 
-    e['x'], e['x_vel'], e['x_acc'], e['health'] = read4(f, rinex_ver)
-    e['y'], e['y_vel'], e['y_acc'], e['freq_num'] = read4(f, rinex_ver)
-    e['z'], e['z_vel'], e['z_acc'], e['age'] = read4(f, rinex_ver)
+    e['x'], e['x_vel'], e['x_acc'], e['health'], ephem_bytes = read4(ephem_bytes, rinex_ver)
+    e['y'], e['y_vel'], e['y_acc'], e['freq_num'], ephem_bytes = read4(ephem_bytes, rinex_ver)
+    e['z'], e['z_vel'], e['z_acc'], e['age'], ephem_bytes = read4(ephem_bytes, rinex_ver)
 
     e['healthy'] = (e['health'] == 0.0)
-    ephems[prn].append(GLONASSEphemeris(e, epoch, file_name=file_name))
-  f.close()
+    ephems[prn].append(GLONASSEphemeris(e, epoch, file_name="raw_data"))
+  #f.close()
   return ephems
 
 
